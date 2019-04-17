@@ -1,5 +1,6 @@
 import { ResourceClient } from '@reststate/client';
 import deepEquals from './deepEquals';
+import pluralize from 'pluralize';
 
 const STATUS_INITIAL = 'INITIAL';
 const STATUS_LOADING = 'LOADING';
@@ -133,7 +134,7 @@ const resourceModule = ({ name: resourceName, httpClient }) => {
           .catch(handleError(commit));
       },
 
-      loadById({ commit }, { id, options }) {
+      loadById({ commit, dispatch }, { id, options }) {
         commit('SET_STATUS', STATUS_LOADING);
         return client
           .find({ id, options })
@@ -141,6 +142,8 @@ const resourceModule = ({ name: resourceName, httpClient }) => {
             commit('SET_STATUS', STATUS_SUCCESS);
             commit('STORE_RECORD', results.data);
             commit('STORE_META', results.meta);
+
+            return dispatch('storeIncluded', results);
           })
           .catch(handleError(commit));
       },
@@ -252,6 +255,50 @@ const resourceModule = ({ name: resourceName, httpClient }) => {
 
       resetState({ commit }) {
         commit('RESET_STATE');
+      },
+
+      storeIncluded({ commit }, { data, included }) {
+        if (!included || !Array.isArray(included)) return;
+
+        const existingResourceNames = Object.keys(this._modules.root._children);
+        const parent = {
+          id: data.id,
+          type: data.type,
+        };
+
+        const relationshipsMap = new Map(Object.entries(data.relationships));
+
+        relationshipsMap.forEach(({ data }, relationship) => {
+          if (Array.isArray(data)) {
+            const targetResourceName = pluralize(data[0].type);
+
+            if (
+              !existingResourceNames.find(name => name === targetResourceName)
+            )
+              return;
+
+            const records = data.map(relationshipData =>
+              included.find(
+                includedItem => relationshipData.id === includedItem.id,
+              ),
+            );
+            const relatedIds = records.map(r => r.id);
+
+            commit(`${targetResourceName}/STORE_RECORDS`, records, {
+              root: true,
+            });
+            commit(
+              `${targetResourceName}/STORE_RELATED`,
+              { parent, relationship, relatedIds },
+              { root: true },
+            );
+            commit(`${targetResourceName}/SET_STATUS`, STATUS_SUCCESS, {
+              root: true,
+            });
+
+            return records;
+          }
+        });
       },
     },
 
